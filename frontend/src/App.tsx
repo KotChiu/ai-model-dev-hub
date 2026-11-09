@@ -6,7 +6,6 @@ import {
   Plus, RefreshCw, ShieldCheck, Sparkles, Terminal, WandSparkles
 } from 'lucide-react'
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import './workflow.css'
 
 type LabelKey = 'fpd7' | 'fpd30' | 'tpd30' | 'c_m1' | 'c_d30'
 type FeatureRow = { sample_id:string; features: Record<string,string|number> }
