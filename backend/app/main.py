@@ -180,3 +180,8 @@ def lineage(eid: str):
         [e["dataset"], eid], ["credit-policy/v3", eid], [eid, e["checkpoint"]],
         [e["checkpoint"], "eval-" + eid], ["eval-" + eid, "gate-" + eid]
     ]}
+
+
+# A separate router implements the task-oriented, synthetic credit research wizard.
+from .workflow import router as credit_workflow_router
+app.include_router(credit_workflow_router)
