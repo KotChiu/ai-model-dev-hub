@@ -3,7 +3,7 @@ import {
   Activity, ArrowLeft, ArrowRight, Beaker, BookOpen, Check, CheckCircle2,
   ChevronDown, CircleAlert, ClipboardList, Code2, Copy, Database, Download,
   FileCheck2, FileText, FlaskConical, GitBranch, Layers3, Link2, Play,
-  Plus, RefreshCw, Search, Settings2, ShieldCheck, Sparkles, Table2, Terminal, WandSparkles
+  Plus, RefreshCw, ShieldCheck, Sparkles, Terminal, WandSparkles
 } from 'lucide-react'
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import './workflow.css'
@@ -97,7 +97,6 @@ export default function App(){
  const [lr,setLr]=useState(.000001)
  const [showHistory,setShowHistory]=useState(false)
  const [queryMode,setQueryMode]=useState<'natural'|'json'>('natural')
- const [showSqlTip,setShowSqlTip]=useState(false)
  useEffect(()=>{
   Promise.all([api<Source>('/sources'),api<RunListItem[]>('/runs')])
    .then(([s,r])=>{setSources(s);setHistory(r)})
@@ -146,7 +145,6 @@ export default function App(){
   const anchor=document.createElement('a');anchor.href=url;anchor.download=run.id+'-test-report.json';anchor.click()
   setTimeout(()=>URL.revokeObjectURL(url),1000)
  }
- const sample=run?.raw_preview[0]
  const labelAttached=run&&maxStep>=2
  const queryReady=run&&maxStep>=3
  const splitReady=run&&maxStep>=4
