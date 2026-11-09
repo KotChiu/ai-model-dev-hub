@@ -81,7 +81,8 @@ def public(run):
         "query_preview": dialogues[:3], "query_count": len(dialogues),
         "split": {k: len(v) for k, v in split.items()},
         "split_seed": run.get("split_seed"),
-        "training": run.get("training"), "report": run.get("report"),
+        "training": run.get("training"), "candidates": run.get("candidates", []),
+        "report": run.get("report"),
         "adapter": "synthetic-mock", "sql_executed": False
     }
 
@@ -301,18 +302,38 @@ def split_data(run_id: str, config: SplitConfig):
 @router.post("/runs/{run_id}/train")
 def simulate_training(run_id: str, config: TrainingConfig):
     run = load(run_id)
-    ensure(run, "split")
-    # No optimizer, gradients, GPU job, inference or checkpoint exists here.
+    if run["stage"] not in ("split", "trained"):
+        raise HTTPException(409, "Tune candidates only after split and before final test report")
+    candidates = run.setdefault("candidates", [])
+    if len(candidates) >= 6:
+        raise HTTPException(409, "Demo supports at most six tuning candidates per dataset")
+    # No optimizer, gradients, GPU job, inference or actual checkpoint exists here.
     history = [
         {"epoch": i, "simulated_loss": round(1.32 / (1 + 0.48 * i + config.reward_weight / 4), 3),
          "simulated_reward": round(min(0.95, 0.23 + i * 0.105 + config.reward_weight * 0.08), 3)}
         for i in range(1, config.epochs + 1)
     ]
-    run["training"] = {
-        "mode": "synthetic-trajectory", "checkpoint": "simulated-" + run_id,
-        "config": config.model_dump(), "history": history, "real_model_trained": False,
-        "note": "query-only examples are RL rollout prompts, not SFT answer labels. This demo does not train a model."
+    val_ids = run["split"]["val"]
+    x_map = {r["sample_id"]: r["features"] for r in run["raw_rows"]}
+    y_map = {r["sample_id"]: r["labels"] for r in run["label_rows"]}
+    val_auc = roc_auc([
+        (score(x_map[sid], config.reward_weight), y_map[sid]["fpd30"])
+        for sid in val_ids
+    ])
+    candidate = {
+        "candidate_id": f"C{len(candidates)+1:02d}",
+        "mode": "synthetic-trajectory",
+        "checkpoint": f"simulated-{run_id}-c{len(candidates)+1}",
+        "config": config.model_dump(),
+        "history": history, "val_fpd30_auc": val_auc,
+        "real_model_trained": False,
+        "note": "query-only prompts need rollout and reward for real RL; no model is trained here."
     }
+    candidates.append(candidate)
+    # Select only on validation. The frozen test split is never inspected here.
+    run["training"] = max(candidates, key=lambda c: (
+        -1.0 if c["val_fpd30_auc"] is None else c["val_fpd30_auc"]
+    ))
     run["stage"] = "trained"
     save(run)
     return public(run)
@@ -323,7 +344,6 @@ def generate_report(run_id: str):
     run = load(run_id)
     ensure(run, "trained")
     split = run["split"]
-    test_ids = set(split["test"])
     y_map = {r["sample_id"]: r["labels"] for r in run["label_rows"]}
     x_map = {r["sample_id"]: r["features"] for r in run["raw_rows"]}
     weight = run["training"]["config"]["reward_weight"]
@@ -354,6 +374,9 @@ def generate_report(run_id: str):
                     "val": len(split["val"]), "test": len(split["test"]),
                     "split_seed": run["split_seed"], "test_set_locked": True},
         "training": run["training"],
+        "tuning_history": [{"candidate_id": c["candidate_id"], "config": c["config"],
+                            "val_fpd30_auc": c["val_fpd30_auc"]} for c in run.get("candidates", [])],
+        "selected_candidate": run["training"]["candidate_id"],
         "metrics": metrics, "badcases": badcases,
         "checks": [
             {"name": "SQL 与分区来源已记录", "passed": True},
