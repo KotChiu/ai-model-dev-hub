@@ -1,111 +1,265 @@
-import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react'
-import { Activity, ArrowDown, ArrowRight, Beaker, BookOpen, Boxes, BrainCircuit, CheckCircle2, ChevronDown, CircleAlert, ClipboardCheck, Code2, Database, GitBranch, Layers3, LayoutDashboard, Menu, Plus, RefreshCw, Search, Settings2, ShieldCheck, Sparkles, X } from 'lucide-react'
-import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
+import {
+  Activity, ArrowLeft, ArrowRight, Beaker, BookOpen, Check, CheckCircle2,
+  ChevronDown, CircleAlert, ClipboardList, Code2, Copy, Database, Download,
+  FileCheck2, FileText, FlaskConical, GitBranch, Layers3, Link2, Play,
+  Plus, RefreshCw, Search, Settings2, ShieldCheck, Sparkles, Table2, Terminal, WandSparkles
+} from 'lucide-react'
+import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import './workflow.css'
 
-type Experiment = { id: string; name: string; reward: string; lr: number; dataset: string; checkpoint: string; status: string; created_at: string; val_risk: number | null; test_risk: number | null; avg_credit: number | null; coverage: number | null; violations: number | null; gate: string; notes: string }
-type Overview = { experiments: number; passed: number; failed: number; datasets: number; best_risk: number | null; recent: Experiment[]; pipeline: string[] }
-type Contract = { id: string; name: string; version: string; kind: string; status: string; detail: string }
-type Skill = { id: string; name: string; stage: string; summary: string }
-type Knowledge = { id: string; title: string; category: string; source: string; detail: string }
-type Badcase = { type: string; count: number; severity: string; note: string }
-type Lineage = { nodes: { id: string; kind: string; label: string }[]; edges: string[][] }
-type View = 'overview' | 'experiments' | 'contracts' | 'skills' | 'badcases' | 'lineage' | 'knowledge'
-const labels: Record<View,string> = { overview:'总览工作台', experiments:'实验管理', contracts:'指标与契约', skills:'Skills 资产', badcases:'Badcase 分析', lineage:'模型血缘', knowledge:'经验知识库' }
-const menu: {id:View; icon:typeof Activity}[] = [{id:'overview',icon:LayoutDashboard},{id:'experiments',icon:Beaker},{id:'contracts',icon:ShieldCheck},{id:'skills',icon:Boxes},{id:'badcases',icon:ClipboardCheck},{id:'lineage',icon:GitBranch},{id:'knowledge',icon:BookOpen}]
-async function request<T>(path:string, options?:RequestInit): Promise<T> {
-  const response = await fetch('/api'+path, { ...options, headers: {'Content-Type':'application/json',...(options?.headers||{})} })
-  if (!response.ok) throw new Error((await response.text()) || '请求失败')
-  return response.json() as Promise<T>
+type LabelKey = 'fpd7' | 'fpd30' | 'tpd30' | 'c_m1' | 'c_d30'
+type FeatureRow = { sample_id:string; features: Record<string,string|number> }
+type LabelRow = { sample_id:string; labels: Record<LabelKey,number> }
+type Dialogue = { sample_id:string; messages:{role:string;content:string}[] }
+type TrainHistory = { epoch:number; simulated_loss:number; simulated_reward:number }
+type Training = {
+  mode:string; checkpoint:string; real_model_trained:boolean;
+  config:{epochs:number;learning_rate:number;reward_weight:number;reward_version:string}
+  history:TrainHistory[];note:string
 }
-function Badge({value}:{value:string}) {
-  const good = ['PASS','completed','frozen','active'].includes(value)
-  const bad = ['FAIL'].includes(value)
-  return <span className={'badge '+(good?'good':bad?'bad':'neutral')}><span className="badge-dot"/>{value}</span>
+type Report = {
+  title:string;status:string;model_trained:boolean;generated_at:string;run_id:string;
+  dataset:{total:number;train:number;val:number;test:number;split_seed:number;test_set_locked:boolean};
+  metrics:{label:string;positives:number;positive_rate:number;auc:number|null}[];
+  checks:{name:string;passed:boolean;reason?:string}[];
+  badcases:{sample_id:string;issue:string;label:string;actual:number;risk_score:number}[];
+  summary:string;
 }
-function Stat({icon:Icon,label,value,sub}:{icon:typeof Activity;label:string;value:string;sub:string}) {return <div className="stat card"><div className="stat-top"><span>{label}</span><span className="stat-icon"><Icon size={18}/></span></div><div className="stat-value">{value}</div><div className="stat-sub">{sub}</div></div>}
-function SectionTitle({title,desc,extra}:{title:string;desc?:string;extra?:ReactNode}) {return <div className="section-head"><div><h2>{title}</h2>{desc && <p>{desc}</p>}</div>{extra}</div>}
-function ExperimentTable({rows,choose}:{rows:Experiment[];choose:(id:string)=>void}) {
-  return <div className="table-scroll"><table><thead><tr><th>实验 / 模型</th><th>Reward</th><th>Val 风险</th><th>Test 风险</th><th>授信均额</th><th>准出</th><th></th></tr></thead>
-  <tbody>{rows.map(r=><tr key={r.id}><td><button className="table-link" onClick={()=>choose(r.id)}><strong>{r.name}</strong><small>{r.id} · {r.dataset}</small></button></td><td><code>{r.reward}</code></td><td>{r.val_risk == null?'—':r.val_risk.toFixed(2)+'%'}</td><td>{r.test_risk == null?'—':r.test_risk.toFixed(2)+'%'}</td><td>{r.avg_credit == null?'—':r.avg_credit.toFixed(1)+'万'}</td><td><Badge value={r.gate}/></td><td><button className="icon-button" title="查看血缘" onClick={()=>choose(r.id)}><ArrowRight size={16}/></button></td></tr>)}</tbody></table>{!rows.length&&<div className="empty">暂无实验记录</div>}</div>
+type Run = {
+  id:string;name:string;stage:string;created_at:string;updated_at:string;
+  source:{project:string;table:string;partition:string;sql:string;sample_size:number;seed:number};
+  row_count:number;raw_preview:FeatureRow[];label_preview:LabelRow[];label_fields:LabelKey[];
+  query_preview:Dialogue[];query_count:number;
+  split:{train?:number;val?:number;test?:number};split_seed?:number;
+  training?:Training;report?:Report;adapter:string;sql_executed:boolean
 }
-function App() {
- const [view,setView] = useState<View>('overview')
- const [overview,setOverview] = useState<Overview|null>(null)
- const [experiments,setExperiments] = useState<Experiment[]>([])
- const [contracts,setContracts] = useState<Contract[]>([])
- const [skills,setSkills] = useState<Skill[]>([])
- const [badcases,setBadcases] = useState<Badcase[]>([])
- const [knowledge,setKnowledge] = useState<Knowledge[]>([])
- const [lineage,setLineage] = useState<Lineage|null>(null)
- const [selected,setSelected] = useState<string>('')
- const [loading,setLoading] = useState(true)
- const [error,setError] = useState('')
- const [modal,setModal] = useState(false)
- const [busy,setBusy] = useState(false)
- const [filter,setFilter] = useState('')
- const [mobileMenu,setMobileMenu] = useState(false)
- const [form,setForm] = useState({name:'New reward exploration',reward:'reward-v5',lr:'0.000001',dataset:'credit-v13',notes:'对照实验：保持数据版本不变'})
- const refresh = useCallback(async()=>{
-   try {
-     const [o,e,c,s,b,k] = await Promise.all([
-       request<Overview>('/overview'),request<Experiment[]>('/experiments'),
-       request<Contract[]>('/contracts'),request<Skill[]>('/skills'),
-       request<Badcase[]>('/badcases'),request<Knowledge[]>('/knowledge')
-     ])
-     setOverview(o);setExperiments(e);setContracts(c);setSkills(s);setBadcases(b);setKnowledge(k)
-     setSelected(prev=>prev || e[0]?.id || '')
-     setError('')
-   } catch (err) {setError(err instanceof Error?err.message:'无法加载 API')} finally {setLoading(false)}
+type Source = {
+  project:string;mode:string;label_api:string;label_fields:LabelKey[];
+  tables:{name:string;description:string;partitions:string[];fields:string[]}[]
+}
+type RunListItem = {id:string;name:string;stage:string;updated_at:string}
+const STAGES = [
+  {title:'ODPS 数据采样',subtitle:'选表 · 选分区 · 编写 SQL', icon:Database},
+  {title:'获取特征与 Y 标',subtitle:'Mock 标签接口 · 关联样本',icon:Link2},
+  {title:'生成对话数据',subtitle:'仅包含 user/query，不含 answer',icon:Code2},
+  {title:'划分数据集',subtitle:'Train / Val / Test',icon:GitBranch},
+  {title:'训练与调优',subtitle:'调整超参与 Reward',icon:FlaskConical},
+  {title:'测试报告',subtitle:'指标 · Badcase · 可追溯性',icon:FileCheck2}
+]
+const LABELS:LabelKey[]=['fpd7','fpd30','tpd30','c_m1','c_d30']
+const stageIndex:Record<string,number>={sampled:1,labeled:2,dialogues:3,split:4,trained:5,reported:5}
+function fmt(n:number|undefined|null,precision=2):string{return n===undefined||n===null?'—':n.toFixed(precision)}
+function sqlFor(table:string,partition:string,size:number):string{return [
+  'SELECT',
+  '    user_id, risk_grade, business_months,',
+  '    monthly_sales, debt_ratio, overdue_cnt_12m,',
+  '    total_credit_amt',
+  'FROM demo_credit_research.'+table,
+  "WHERE ds = '"+partition+"'",
+  'ORDER BY RAND()',
+  'LIMIT '+size
+].join('\n')}
+async function api<T>(path:string, init?:RequestInit):Promise<T>{
+ const response=await fetch('/api/workflow'+path,{...init,headers:{'Content-Type':'application/json',...(init?.headers||{})}})
+ if(!response.ok){let msg='API 请求失败';try{const data=await response.json();msg=typeof data.detail==='string'?data.detail:JSON.stringify(data.detail)}catch{/* plain text */}throw new Error(msg)}
+ return response.json() as Promise<T>
+}
+function IconBox({children,tone='blue'}:{children:ReactNode;tone?:'blue'|'green'|'purple'|'amber'}){return <div className={'icon-box '+tone}>{children}</div>}
+function Section({kicker,title,description,aside}:{kicker:string;title:string;description:string;aside?:ReactNode}){
+ return <div className="section-title"><div><div className="section-kicker">{kicker}</div><h2>{title}</h2><p>{description}</p></div>{aside}</div>
+}
+function TableWrap({children}:{children:ReactNode}){return <div className="table-wrap"><table>{children}</table></div>}
+function Status({done,text}:{done:boolean;text:string}){return <span className={'status '+(done?'status-ok':'status-pending')}>{done?<CheckCircle2 size={13}/>:<CircleAlert size={13}/>} {text}</span>}
+function Kpi({label,value,small}:{label:string;value:string;small?:string}){return <div className="kpi"><span>{label}</span><strong>{value}</strong>{small&&<small>{small}</small>}</div>}
+function Tag({children}:{children:ReactNode}){return <span className="tag">{children}</span>}
+
+export default function App(){
+ const [sources,setSources]=useState<Source|null>(null)
+ const [history,setHistory]=useState<RunListItem[]>([])
+ const [run,setRun]=useState<Run|null>(null)
+ const [step,setStep]=useState(0)
+ const [loading,setLoading]=useState(true)
+ const [busy,setBusy]=useState(false)
+ const [error,setError]=useState('')
+ const [name,setName]=useState('授信 RL — 2026Q4 研发实验')
+ const [table,setTable]=useState('demo_credit_feature_di')
+ const [partition,setPartition]=useState('20261031')
+ const [sampleSize,setSampleSize]=useState(240)
+ const [seed,setSeed]=useState(42)
+ const [sql,setSql]=useState(sqlFor('demo_credit_feature_di','20261031',240))
+ const [valRatio,setValRatio]=useState(.1)
+ const [testRatio,setTestRatio]=useState(.2)
+ const [splitSeed,setSplitSeed]=useState(42)
+ const [epochs,setEpochs]=useState(4)
+ const [rewardWeight,setRewardWeight]=useState(.6)
+ const [rewardVersion,setRewardVersion]=useState('risk-aware-v1')
+ const [lr,setLr]=useState(.000001)
+ const [showHistory,setShowHistory]=useState(false)
+ const [queryMode,setQueryMode]=useState<'natural'|'json'>('natural')
+ const [showSqlTip,setShowSqlTip]=useState(false)
+ useEffect(()=>{
+  Promise.all([api<Source>('/sources'),api<RunListItem[]>('/runs')])
+   .then(([s,r])=>{setSources(s);setHistory(r)})
+   .catch(err=>setError(String(err)))
+   .finally(()=>setLoading(false))
  },[])
- useEffect(()=>{void refresh()},[refresh])
- useEffect(()=>{if(selected){request<Lineage>('/lineage/'+encodeURIComponent(selected)).then(setLineage).catch(()=>setLineage(null))}},[selected])
- async function submit(event:FormEvent<HTMLFormElement>) {
-   event.preventDefault();setBusy(true)
-   try {
-     const result=await request<{id:string}>('/experiments',{method:'POST',body:JSON.stringify({...form,lr:Number(form.lr)})})
-     await refresh();setSelected(result.id);setModal(false);setView('experiments')
-   } catch(err){setError(String(err))}finally{setBusy(false)}
+ async function syncRun(updated:Run,nextStep?:number){
+   setRun(updated)
+   setStep(nextStep===undefined?(stageIndex[updated.stage]??0):nextStep)
+   setHistory(await api<RunListItem[]>('/runs'))
  }
- async function evaluate(id:string) {
-   setBusy(true)
-   try {await request('/experiments/'+encodeURIComponent(id)+'/evaluate',{method:'POST'});await refresh()}catch(err){setError(String(err))}finally{setBusy(false)}
+ async function perform(action:()=>Promise<Run>, nextStep:number){
+  setBusy(true);setError('')
+  try{await syncRun(await action(),nextStep)}
+  catch(err){setError(err instanceof Error?err.message:String(err))}
+  finally{setBusy(false)}
  }
- function choose(id:string){setSelected(id);setView('lineage')}
- const chosen = experiments.find(e=>e.id===selected)
- const chart = [...experiments].filter(e=>e.test_risk!==null).reverse().map(e=>({name:e.id,risk:e.test_risk,val:e.val_risk}))
- const passing = experiments.filter(e=>e.gate==='PASS')
- const filtered=experiments.filter(e=>(e.name+' '+e.id+' '+e.reward).toLowerCase().includes(filter.toLowerCase()))
- return <div className="app-shell">
-   <aside className={'sidebar '+(mobileMenu?'sidebar-open':'')}>
-     <div className="brand"><div className="brand-symbol"><Layers3 size={22}/></div><div><strong>MODEL HUB</strong><small>AI Development Platform</small></div><button className="close-mobile" onClick={()=>setMobileMenu(false)}><X size={18}/></button></div>
-     <div className="workspace"><span className="workspace-icon"><BrainCircuit size={18}/></span><span><strong>Credit Intelligence</strong><small>Research Workspace</small></span><ChevronDown size={14}/></div>
-     <div className="nav-label">WORKSPACE</div>
-     <nav>{menu.map(({id,icon:Icon})=><button key={id} className={'nav-item '+(view===id?'nav-active':'')} onClick={()=>{setView(id);setMobileMenu(false)}}><Icon size={18}/>{labels[id]}{id==='experiments'&&<span className="nav-count">{experiments.length}</span>}</button>)}</nav>
-     <div className="sidebar-bottom"><div className="agent-card"><div><Sparkles size={17}/><strong>Codex Ready</strong></div><p>Contracts · Recipes · Skills<br/>由 AGENTS.md 约束执行</p><span className="agent-status"><span/> Workspace configured</span></div><div className="sidebar-footer"><Settings2 size={16}/> Demo environment <span>v0.1</span></div></div>
-   </aside>
-   <main className="main">
-     <header className="topbar"><div className="breadcrumbs"><button className="mobile-toggle" onClick={()=>setMobileMenu(true)}><Menu size={20}/></button>Workspace <span>/</span> Credit RL <span>/</span> <strong>{labels[view]}</strong></div><div className="top-actions"><span className="env-pill"><span/> SYNTHETIC DEMO</span><button className="refresh" onClick={()=>{setLoading(true);void refresh()}} title="刷新"><RefreshCw size={16}/></button><div className="avatar">AI</div></div></header>
-     <div className="content">
-       <div className="page-heading"><div><div className="eyebrow"><span/> MODEL RESEARCH WORKSPACE</div><h1>{labels[view]}</h1><p>{view==='overview'?'从数据到评估，构建可追溯、可复用的 AI 模型研发闭环。':'统一管理实验资产、规则定义与质量准出。'}</p></div><button className="primary-button" onClick={()=>setModal(true)}><Plus size={17}/> 新建实验</button></div>
-       {error&&<div className="error"><CircleAlert size={17}/> 无法完成请求：{error}<button onClick={()=>setError('')}><X size={15}/></button></div>}
-       {loading&&!overview?<div className="loading">正在加载实验工作空间…</div>:null}
-       {view==='overview'&&overview&&<div className="screen">
-         <div className="stats-grid"><Stat icon={Beaker} label="实验总数" value={String(overview.experiments).padStart(2,'0')} sub="Registered experiments"/><Stat icon={CheckCircle2} label="通过准出" value={String(overview.passed).padStart(2,'0')} sub="Synthetic release gates"/><Stat icon={Database} label="数据集版本" value={String(overview.datasets).padStart(2,'0')} sub="Reproducible snapshots"/><Stat icon={Activity} label="最低模拟风险" value={overview.best_risk?.toFixed(2)+'%' || '—'} sub="Test risk · lower is better"/></div>
-         <div className="panel-grid"><section className="card chart-card"><SectionTitle title="实验效果趋势" desc="冻结 Test 风险与 Val 风险 · 合成演示数据" extra={<span className="small-legend"><i/>Test <i className="legend-muted"/>Val</span>}/><div className="chart-container"><ResponsiveContainer width="100%" height="100%"><AreaChart data={chart} margin={{top:12,right:12,left:-20,bottom:5}}><defs><linearGradient id="risk-fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="#5f8bfa" stopOpacity={0.22}/><stop offset="95%" stopColor="#5f8bfa" stopOpacity={0}/></linearGradient></defs><CartesianGrid strokeDasharray="3 5" vertical={false} stroke="#e8ecf4"/><XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fill:'#8b95a6',fontSize:11}}/><YAxis axisLine={false} tickLine={false} domain={['dataMin - 0.3','dataMax + 0.3']} tick={{fill:'#8b95a6',fontSize:11}} tickFormatter={v=>v+'%'}/><Tooltip formatter={(v)=>String(v)+'%'} contentStyle={{borderRadius:12,border:'1px solid #e6eaf2'}}/><Area type="monotone" dataKey="risk" name="Test" stroke="#4c75ec" strokeWidth={2.5} fill="url(#risk-fill)"/><Area type="monotone" dataKey="val" name="Val" stroke="#9db0d8" strokeWidth={2} strokeDasharray="5 5" fill="transparent"/></AreaChart></ResponsiveContainer></div></section>
-         <section className="card gate-card"><SectionTitle title="准出评估" desc="质量门禁 · Release Gate v1"/><div className="gate-banner"><ShieldCheck size={23}/><div><strong>{passing.length} 个候选模型通过</strong><span>模拟准出规则（非真实信贷标准）</span></div></div>{[{name:'模拟 Test 风险',threshold:'≤ 3.50%',good:'Risk Control'},{name:'输出覆盖率',threshold:'≥ 95.00%',good:'Coverage'},{name:'约束违反率',threshold:'≤ 1.00%',good:'Compliance'}].map(a=><div className="gate-item" key={a.name}><span className="gate-check"><CheckCircle2 size={17}/></span><div><strong>{a.name}</strong><small>{a.good}</small></div><b>{a.threshold}</b></div>)}<button className="subtle-link" onClick={()=>setView('contracts')}>查看完整准出契约 <ArrowRight size={15}/></button></section></div>
-         <section className="card recent-card"><SectionTitle title="最近实验" desc="所有实验可追溯数据与 Reward 配置" extra={<button className="subtle-link" onClick={()=>setView('experiments')}>查看全部 <ArrowRight size={15}/></button>}/><ExperimentTable rows={overview.recent} choose={choose}/></section>
-         <section className="pipeline-card card"><SectionTitle title="端到端研发流水线" desc="基于 Recipe 的标准化流程 · 从实验到知识沉淀"/><div className="pipeline">{overview.pipeline.map((n,i)=><div className="pipeline-node" key={n}><span className="step-number">{String(i+1).padStart(2,'0')}</span><span>{n}</span>{i<overview.pipeline.length-1&&<ArrowRight className="step-arrow" size={14}/>}</div>)}</div></section>
-       </div>}
-       {view==='experiments'&&<div className="screen"><section className="card full-card"><SectionTitle title="实验运行记录" desc="支持创建合成实验、运行模拟评估及跳转模型血缘" extra={<div className="search-box"><Search size={16}/><input value={filter} onChange={e=>setFilter(e.target.value)} placeholder="搜索实验或 Reward"/></div>}/><ExperimentTable rows={filtered} choose={choose}/></section>{chosen&&<section className="card detail-card"><SectionTitle title={'当前选择 · '+chosen.id} desc={chosen.notes}/><div className="detail-grid">{[{k:'Dataset',v:chosen.dataset},{k:'Reward',v:chosen.reward},{k:'Learning Rate',v:chosen.lr.toExponential(1)},{k:'Checkpoint',v:chosen.checkpoint},{k:'Test Risk',v:chosen.test_risk===null?'—':chosen.test_risk+'%'},{k:'Gate',v:chosen.gate}].map(x=><div key={x.k}><small>{x.k}</small><strong>{x.v}</strong></div>)}</div>{chosen.status==='draft'&&<button disabled={busy} className="primary-button" onClick={()=>void evaluate(chosen.id)}><Activity size={16}/> {busy?'正在计算…':'执行模拟 Val / Test 评估'}</button>}</section>}</div>}
-       {view==='contracts'&&<div className="screen"><div className="info-strip"><ShieldCheck size={19}/> 规范是模型研发的单一事实来源；冻结契约不得由 Agent 擅自修改。</div><div className="asset-grid">{contracts.map(c=><div className="card asset-card" key={c.id}><div className="asset-top"><div className="asset-icon"><ShieldCheck size={19}/></div><Badge value={c.status}/></div><h3>{c.name}</h3><p>{c.detail}</p><div className="asset-foot"><code>{c.id} / {c.version}</code><span>{c.kind}</span></div></div>)}</div></div>}
-       {view==='skills'&&<div className="screen"><div className="info-strip"><Code2 size={19}/> Skill 定义可执行能力；Contract 定义正确性；Recipe 负责流程编排。</div><div className="asset-grid">{skills.map(s=><div className="card asset-card" key={s.id}><div className="asset-top"><div className="asset-icon purple"><Boxes size={19}/></div><span className="tag">{s.stage}</span></div><h3>{s.name}</h3><p>{s.summary}</p><div className="asset-foot"><code>skills/{s.id}</code><ArrowRight size={15}/></div></div>)}</div></div>}
-       {view==='badcases'&&<div className="screen"><div className="stats-grid"><Stat icon={CircleAlert} label="Badcase 总数" value={String(badcases.reduce((a,b)=>a+b.count,0))} sub="Synthetic cases"/><Stat icon={ShieldCheck} label="分类数量" value={String(badcases.length)} sub="Taxonomy categories"/><Stat icon={ClipboardCheck} label="待验证分布" value="04" sub="Regression categories"/><Stat icon={Activity} label="测试数据" value="Mock" sub="Not production data"/></div><section className="card full-card"><SectionTitle title="Badcase 类型分析" desc="从错误分类升级为可复用回归用例"/>{badcases.map(b=><div className="badcase-row" key={b.type}><div className="badcase-heading"><strong>{b.type}</strong><Badge value={b.severity}/><b>{b.count} cases</b></div><div className="bar-track"><div style={{width:(b.count/25*100)+'%'}}/></div><p>{b.note}</p></div>)}</section></div>}
-       {view==='lineage'&&<div className="screen"><section className="card lineage-card"><SectionTitle title="实验资产血缘" desc="从数据源与 Contract 追溯到模型、评估及准出判定" extra={<select className="select" value={selected} onChange={e=>setSelected(e.target.value)}>{experiments.map(e=><option value={e.id} key={e.id}>{e.id} · {e.name}</option>)}</select>}/><div className="lineage-flow">{lineage?.nodes.map((node,i)=><div className="lineage-part" key={node.id}>{i>0&&<div className="lineage-arrow"><ArrowDown size={18}/></div>}<div className={'lineage-node kind-'+node.kind}><span>{node.kind}</span><strong>{node.label}</strong></div></div>)}</div><p className="lineage-note">注：契约节点与数据节点均是实验的上游依赖；此处用简化线性布局展示，实际依赖由 API 的 edges 返回。</p></section></div>}
-       {view==='knowledge'&&<div className="screen"><div className="info-strip"><BrainCircuit size={19}/> 实验记录说明发生了什么，知识卡片记录有证据边界的结论。</div><div className="asset-grid">{knowledge.map(k=><div className="card asset-card" key={k.id}><div className="asset-top"><div className="asset-icon orange"><BookOpen size={19}/></div><span className="tag">{k.category}</span></div><h3>{k.title}</h3><p>{k.detail}</p><div className="asset-foot"><span>来源：{k.source}</span><ArrowRight size={15}/></div></div>)}</div></div>}
-       <footer className="footer"><span>MODEL HUB · AI-assisted research operations</span><span><span className="foot-dot"/> Synthetic sample data · Not a credit decision system</span></footer>
+ const maxStep=run?(stageIndex[run.stage]??0):0
+ function changeTable(t:string){
+   const p=sources?.tables.find(x=>x.name===t)?.partitions[0]||partition
+   setTable(t);setPartition(p);setSql(sqlFor(t,p,sampleSize))
+ }
+ function changePartition(p:string){setPartition(p);setSql(sqlFor(table,p,sampleSize))}
+ function changeSize(n:number){setSampleSize(n);setSql(sqlFor(table,partition,n))}
+ function newRun(){
+   setRun(null);setStep(0);setShowHistory(false);setError('')
+ }
+ async function openRun(id:string){
+  setBusy(true);setError('')
+  try{const result=await api<Run>('/runs/'+encodeURIComponent(id));setRun(result);setStep(stageIndex[result.stage]??0);setShowHistory(false)}
+  catch(err){setError(String(err))}finally{setBusy(false)}
+ }
+ function submitSample(e:FormEvent<HTMLFormElement>){
+  e.preventDefault();void perform(()=>api<Run>('/runs',{method:'POST',body:JSON.stringify({name,table,partition,sql,sample_size:sampleSize,seed})}),1)
+ }
+ function postStage(path:string,nextStep:number,body?:unknown){
+  if(!run)return
+  void perform(()=>api<Run>('/runs/'+encodeURIComponent(run.id)+path,{
+   method:'POST',...(body===undefined?{}:{body:JSON.stringify(body)})
+  }),nextStep)
+ }
+ function downloadReport(){
+  if(!run?.report)return
+  const blob=new Blob([JSON.stringify(run.report,null,2)],{type:'application/json;charset=utf-8'})
+  const url=URL.createObjectURL(blob)
+  const anchor=document.createElement('a');anchor.href=url;anchor.download=run.id+'-test-report.json';anchor.click()
+  setTimeout(()=>URL.revokeObjectURL(url),1000)
+ }
+ const sample=run?.raw_preview[0]
+ const labelAttached=run&&maxStep>=2
+ const queryReady=run&&maxStep>=3
+ const splitReady=run&&maxStep>=4
+ return <div className="layout">
+  <aside className="sidebar">
+   <div className="brand"><div className="brand-icon"><Layers3 size={23}/></div><div><strong>MODEL LAB</strong><small>AI Coding Workspace</small></div></div>
+   <div className="project-row"><div className="project-icon"><Beaker size={17}/></div><div><strong>Credit RL Research</strong><small>授信模型研发</small></div><ChevronDown size={15}/></div>
+   <div className="sidebar-label">DEVELOPMENT WORKFLOW</div>
+   <nav className="step-nav">
+    {STAGES.map((s,i)=>{const Icon=s.icon;const complete=run?i<maxStep:false;const available=i<=maxStep
+      return <button key={s.title} className={'step-nav-item '+(step===i?'active ':'')+(complete?'complete ':'')} disabled={!available} onClick={()=>setStep(i)}>
+        <span className="step-index">{complete?<Check size={14}/>:String(i+1).padStart(2,'0')}</span>
+        <span><strong>{s.title}</strong><small>{s.subtitle}</small></span><Icon className="step-nav-icon" size={15}/>
+       </button>})}
+   </nav>
+   <div className="sidebar-bottom">
+    <button className="history-toggle" onClick={()=>setShowHistory(!showHistory)}><ClipboardList size={16}/> 历史研发记录 <ChevronDown size={15}/></button>
+    {showHistory&&<div className="history-list">{history.length===0?<small>暂无历史实验</small>:history.map(h=><button key={h.id} onClick={()=>void openRun(h.id)}><strong>{h.name}</strong><small>{h.id} · {h.stage}</small></button>)}</div>}
+    <div className="sidebar-tip"><Sparkles size={18}/><strong>Agent-ready workflow</strong><p>每一步都可沉淀 Contract、Skill、Recipe 和运行产物。</p></div>
+    <div className="side-foot"><span className="green-dot"/> Mock workspace <span>v0.2</span></div>
+   </div>
+  </aside>
+  <main className="workspace-main">
+   <header className="topbar"><div className="crumb">AI WORKSPACE <span>/</span> CREDIT RL <span>/</span> <strong>研发流水线</strong></div><div className="top-right"><span className="mock-pill"><span className="green-dot"/> SYNTHETIC DEMO</span><button className="text-button" onClick={newRun}><Plus size={15}/> 新实验</button><div className="avatar">ML</div></div></header>
+   <div className="page">
+    <div className="page-intro"><div><div className="eyebrow"><span/> END-TO-END MODEL DEVELOPMENT</div><h1>从数据采样到测试报告</h1><p>跟随你的真实研发顺序，把一次模型实验变成可复现的完整流程。</p></div><div className="run-meta"><span>当前流程</span><strong>{run?run.id:'尚未创建'}</strong><small>{run?run.name:'完成第一步创建实验'}</small></div></div>
+    <div className="progress-wrap"><div className="progress-header"><span>研发进度</span><strong>{run?Math.round(maxStep/5*100):0}%</strong></div><div className="progress-bar"><div style={{width:(run?maxStep/5*100:0)+'%'}}/></div><div className="milestones"><span>数据准备</span><span>训练准备</span><span>模型评估</span></div></div>
+    {error&&<div className="error-box"><CircleAlert size={17}/><span>{error}</span><button onClick={()=>setError('')}>×</button></div>}
+    {loading?<div className="card skeleton">正在连接演示服务…</div>:
+    <div className="content-grid">
+     <div className="main-col">
+      {step===0&&<section className="card step-card"><Section kicker="STEP 01 · DATA ACQUISITION" title="从 ODPS 采样原始特征" description="选定表、分区，编写采样 SQL，形成有版本的原始数据快照。" aside={<IconBox><Database size={22}/></IconBox>}/>
+       <form onSubmit={submitSample} className="form-stack">
+        <div className="form-grid"><label className="field"><span>ODPS Project</span><div className="readonly-field"><Database size={15}/>{sources?.project||'demo_credit_research'}</div></label><label className="field"><span>研发实验名称</span><input value={name} onChange={e=>setName(e.target.value)} required minLength={3}/></label></div>
+        <div className="form-grid"><label className="field"><span>选择数据表</span><select value={table} onChange={e=>changeTable(e.target.value)}>{sources?.tables.map(t=><option key={t.name} value={t.name}>{t.name}</option>)}</select><small>{sources?.tables.find(t=>t.name===table)?.description}</small></label><label className="field"><span>分区 ds</span><select value={partition} onChange={e=>changePartition(e.target.value)}>{sources?.tables.find(t=>t.name===table)?.partitions.map(p=><option key={p}>{p}</option>)}</select><small>分区值参与实验血缘记录</small></label></div>
+        <div className="form-grid"><label className="field"><span>采样量（行）</span><input type="number" min={50} max={500} value={sampleSize} onChange={e=>changeSize(Number(e.target.value))}/></label><label className="field"><span>随机种子</span><input type="number" min={0} max={1000000} value={seed} onChange={e=>setSeed(Number(e.target.value))}/></label></div>
+        <div className="sql-header"><div><Terminal size={16}/><strong>ODPS SQL 编辑器</strong><Tag>只读执行模拟</Tag></div><button type="button" className="small-action" onClick={()=>{void navigator.clipboard?.writeText(sql)}}><Copy size={14}/> 复制 SQL</button></div>
+        <div className="sql-editor"><div className="line-num">{sql.split('\n').map((_,i)=><span key={i}>{i+1}</span>)}</div><textarea spellCheck={false} value={sql} onChange={e=>setSql(e.target.value)} aria-label="ODPS SQL"/></div>
+        <div className="notice"><CircleAlert size={16}/> Demo 只验证 SQL 形式并保存文本，不执行真实 ODPS 查询；模拟生成 {sampleSize||'—'} 条特征记录。</div>
+        <div className="action-row"><span className="action-hint">产物：SQL 配置 + 原始特征数据快照</span><button type="submit" disabled={busy||!sources} className="primary">{busy?'正在生成…':'运行采样（模拟）'} <ArrowRight size={17}/></button></div>
+       </form>
+      </section>}
+      {step===1&&run&&<section className="card step-card"><Section kicker="STEP 02 · LABEL ENRICHMENT" title="获取原始特征和 Y 标" description="按样本 ID 调用标签接口，把特征和风险结果关联；标签单独保存，不进入 query。" aside={<IconBox tone="purple"><Link2 size={22}/></IconBox>}/>
+       <div className="flow-horizontal"><div><Database size={19}/><strong>ODPS 原始特征</strong><small>{run.source.table}</small></div><ArrowRight size={21}/><div><Activity size={19}/><strong>Y 标签服务</strong><small>{sources?.label_api}</small></div><ArrowRight size={21}/><div><Layers3 size={19}/><strong>关联样本</strong><small>sample_id JOIN</small></div></div>
+       <div className="mini-heading"><h3>采样结果预览</h3><span>{run.row_count} 条 · {run.source.partition}</span></div>
+       <TableWrap><thead><tr><th>样本 ID</th><th>评级</th><th>经营月数</th><th>销售额(万)</th><th>负债率</th><th>逾期次数</th><th>授信(万)</th></tr></thead><tbody>{run.raw_preview.map(x=><tr key={x.sample_id}><td className="mono">{x.sample_id}</td><td>{x.features.risk_grade}</td><td>{x.features.business_months}</td><td>{x.features.monthly_sales}</td><td>{fmt(Number(x.features.debt_ratio)*100,1)}%</td><td>{x.features.overdue_cnt_12m}</td><td>{x.features.total_credit_amt}</td></tr>)}</tbody></TableWrap>
+       <div className="mini-heading top-space"><h3>Y 标签字段</h3><span>返回值为模拟二分类标签</span></div>
+       <div className="label-chips">{LABELS.map(l=><span key={l}>{l}</span>)}</div>
+       {labelAttached&&<><div className="success-box"><CheckCircle2 size={16}/> 已完成样本标签关联，以下是标签侧预览（不属于模型 query）</div><TableWrap><thead><tr><th>样本 ID</th>{LABELS.map(l=><th key={l}>{l}</th>)}</tr></thead><tbody>{run.label_preview.slice(0,4).map(x=><tr key={x.sample_id}><td className="mono">{x.sample_id}</td>{LABELS.map(l=><td key={l}><span className={x.labels[l]?'value-positive':'value-zero'}>{x.labels[l]}</span></td>)}</tr>)}</tbody></TableWrap></>}
+       <div className="action-row"><span className="action-hint">Y 标签可用于评估，但不能泄漏进输入</span>{!labelAttached?<button disabled={busy} className="primary" onClick={()=>postStage('/labels',2)}>{busy?'关联中…':'模拟调用接口并关联'} <ArrowRight size={17}/></button>:<button className="primary" onClick={()=>setStep(2)}>下一步：生成对话 <ArrowRight size={17}/></button>}</div>
+      </section>}
+      {step===2&&run&&<section className="card step-card"><Section kicker="STEP 03 · DIALOGUE CONSTRUCTION" title="把原始特征加工成 Query" description="生成模型可以消费的对话输入。只生成 user 消息，不创建 assistant answer。" aside={<IconBox tone="purple"><WandSparkles size={22}/></IconBox>}/>
+       <div className="rule-grid"><div><span className="rule-index">01</span><strong>字段格式化</strong><small>评级、负债率、经营数据标准化</small></div><div><span className="rule-index">02</span><strong>业务提示词模板</strong><small>授信动作 + 建议额度 + 依据</small></div><div><span className="rule-index">03</span><strong>标签隔离</strong><small>Y 标放在单独的评估侧数据</small></div></div>
+       {queryReady&&run.query_preview.length>0?<><div className="mini-heading"><h3>生成的 Query 预览</h3><div className="toggle-group"><button className={queryMode==='natural'?'selected':''} onClick={()=>setQueryMode('natural')}>自然语言</button><button className={queryMode==='json'?'selected':''} onClick={()=>setQueryMode('json')}>JSONL</button></div></div>
+        <div className="query-preview"><div className="query-top"><span><span className="user-icon">U</span> USER MESSAGE</span><Tag>{run.query_preview[0].sample_id}</Tag></div><pre>{queryMode==='natural'?run.query_preview[0].messages[0].content:JSON.stringify(run.query_preview[0],null,2)}</pre></div>
+        <div className="separation"><ShieldCheck size={17}/><div><strong>隔离检查</strong><span>消息数组只有 user role；没有 answer、assistant 或 FPD/TPD/C 标签字段。</span></div><Status done text="PASS"/></div>
+        <div className="subtle-box"><strong>实际对话数据结构</strong><code>{'{"sample_id":"...","messages":[{"role":"user","content":"..."}]}'}</code><p>共 {run.query_count} 条 query，标签在独立 sidecar 中保存。</p></div></>
+       :<div className="subtle-box"><strong>待执行转换</strong><p>把 {run.row_count} 条特征数据映射进统一提示词；不生成任何目标 answer，也不将标签字段带入 prompt。</p><pre className="code-soft">{'{"messages":[{"role":"user","content":"客户风险评级：..."}]}'}</pre></div>}
+       <div className="action-row"><span className="action-hint">产物：query-only 对话记录 + 标签 sidecar</span>{!queryReady?<button disabled={busy} className="primary" onClick={()=>postStage('/dialogues',3)}>{busy?'构造中…':'生成 Query 对话数据'} <ArrowRight size={17}/></button>:<button className="primary" onClick={()=>setStep(3)}>下一步：数据划分 <ArrowRight size={17}/></button>}</div>
+      </section>}
+      {step===3&&run&&<section className="card step-card"><Section kicker="STEP 04 · DATASET SPLIT" title="划分训练、验证与测试集" description="训练集用于学习，Val 用于迭代调参，独立 Test 锁定用于最后出报告。" aside={<IconBox tone="green"><GitBranch size={22}/></IconBox>}/>
+       <div className="split-visual"><div style={{width:(1-valRatio-testRatio)*100+'%'}} className="train-seg">TRAIN</div><div style={{width:valRatio*100+'%'}} className="val-seg">VAL</div><div style={{width:testRatio*100+'%'}} className="test-seg">TEST</div></div>
+       <div className="split-cards"><Kpi label="Train 训练集" value={splitReady?String(run.split.train):String(Math.round(run.row_count*(1-valRatio-testRatio)))} small="用于模拟训练过程"/><Kpi label="Val 验证集" value={splitReady?String(run.split.val):String(Math.round(run.row_count*valRatio))} small="允许实验选择"/><Kpi label="Test 冻结测试集" value={splitReady?String(run.split.test):String(Math.round(run.row_count*testRatio))} small="报告阶段才使用"/></div>
+       <div className="form-grid top-space"><label className="field"><span>Test 比例</span><select disabled={!!splitReady} value={testRatio} onChange={e=>setTestRatio(Number(e.target.value))}><option value=".15">15%</option><option value=".2">20%</option><option value=".25">25%</option><option value=".3">30%</option></select></label><label className="field"><span>Val 比例</span><select disabled={!!splitReady} value={valRatio} onChange={e=>setValRatio(Number(e.target.value))}><option value=".05">5%</option><option value=".1">10%</option><option value=".15">15%</option><option value=".2">20%</option></select></label></div>
+       <label className="field top-space"><span>划分随机种子</span><input type="number" value={splitReady?run.split_seed||splitSeed:splitSeed} disabled={!!splitReady} min={0} max={1000000} onChange={e=>setSplitSeed(Number(e.target.value))}/></label>
+       <div className="separation"><ShieldCheck size={17}/><div><strong>数据隔离原则</strong><span>三份样本 ID 互斥；Test 不能反复用来选择超参。</span></div><Status done={!!splitReady} text={splitReady?'已冻结':'待切分'}/></div>
+       <div className="action-row"><span className="action-hint">产物：train/val/test 样本清单与 seed</span>{!splitReady?<button disabled={busy} className="primary" onClick={()=>postStage('/split',4,{test_ratio:testRatio,val_ratio:valRatio,seed:splitSeed})}>{busy?'划分中…':'确定数据集划分'} <ArrowRight size={17}/></button>:<button className="primary" onClick={()=>setStep(4)}>下一步：训练调优 <ArrowRight size={17}/></button>}</div>
+      </section>}
+      {step===4&&run&&<section className="card step-card"><Section kicker="STEP 05 · TRAINING & TUNING" title="配置训练与 Reward 调优" description="控制学习率、Epoch、Reward 权重，模拟训练轨迹并记录配置版本。" aside={<IconBox tone="amber"><FlaskConical size={22}/></IconBox>}/>
+       <div className="notice training-warning"><CircleAlert size={16}/> 当前只模拟训练日志和模型指标，不会实际启动 GPU、RL rollout 或生成可用的 checkpoint。</div>
+       <div className="form-grid top-space"><label className="field"><span>训练方法</span><div className="readonly-field"><Sparkles size={16}/> GRPO / RL（模拟）</div></label><label className="field"><span>Reward 版本</span><input disabled={!!run.training} value={run.training?.config.reward_version||rewardVersion} onChange={e=>setRewardVersion(e.target.value)}/></label></div>
+       <div className="form-grid"><label className="field"><span>Learning Rate</span><input disabled={!!run.training} type="number" min={0.00000001} max={0.01} step="any" value={run.training?.config.learning_rate??lr} onChange={e=>setLr(Number(e.target.value))}/></label><label className="field"><span>Epochs</span><select disabled={!!run.training} value={run.training?.config.epochs??epochs} onChange={e=>setEpochs(Number(e.target.value))}>{[2,3,4,5,6,8,10].map(x=><option key={x} value={x}>{x} epochs</option>)}</select></label></div>
+       <label className="field top-space"><span>风险约束 Reward 权重 <strong className="field-value">{fmt(run.training?.config.reward_weight??rewardWeight,2)}</strong></span><input disabled={!!run.training} className="range" type="range" min="0" max="1" step=".05" value={run.training?.config.reward_weight??rewardWeight} onChange={e=>setRewardWeight(Number(e.target.value))}/><div className="range-labels"><span>更偏业务收益</span><span>更偏风险控制</span></div></label>
+       {run.training?<><div className="success-box"><CheckCircle2 size={17}/> 模拟训练轨迹已生成；模型权重没有实际更新。</div><div className="mini-heading"><h3>训练趋势</h3><Tag>{run.training.checkpoint}</Tag></div><div className="chart"><ResponsiveContainer width="100%" height="100%"><LineChart data={run.training.history}><CartesianGrid strokeDasharray="3 5" vertical={false} stroke="#e9edf5"/><XAxis dataKey="epoch" tickLine={false} axisLine={false}/><YAxis tickLine={false} axisLine={false}/><Tooltip/><Line dataKey="simulated_loss" name="模拟 Loss" stroke="#5678df" strokeWidth={3} dot/><Line dataKey="simulated_reward" name="模拟 Reward" stroke="#42ae8e" strokeWidth={3} dot/></LineChart></ResponsiveContainer></div></>:<div className="subtle-box"><strong>训练输入</strong><p>{run.split.train??0} 条 Query-only 训练样本，{run.split.val??0} 条 Val 样本。输入没有标准答案，因此真实训练需要模型 rollout 与可计算 Reward；这里仅演示流程。</p></div>}
+       <div className="action-row"><span className="action-hint">产物：训练配置、历史曲线与模拟 checkpoint 引用</span>{!run.training?<button disabled={busy} className="primary" onClick={()=>postStage('/train',5,{epochs,learning_rate:lr,reward_weight:rewardWeight,reward_version:rewardVersion})}>{busy?'模拟训练中…':'开始模拟训练'} <Play size={17}/></button>:<button className="primary" onClick={()=>setStep(5)}>下一步：测试报告 <ArrowRight size={17}/></button>}</div>
+      </section>}
+      {step===5&&run&&<section className="card step-card report-card"><Section kicker="STEP 06 · FINAL EVALUATION" title="生成模型测试报告" description="在冻结 Test 集上评估五项 Y 指标，汇总 Badcase 和数据隔离检查。" aside={<IconBox tone="green"><FileText size={22}/></IconBox>}/>
+       {run.report?<><div className="report-banner"><div className="report-icon"><FileCheck2 size={23}/></div><div><span>报告已生成 · Synthetic Only</span><h3>{run.report.title}</h3><small>{run.id} · {new Date(run.report.generated_at).toLocaleString('zh-CN')}</small></div><span className="report-mark">DEMO</span></div>
+       <div className="report-stat-grid"><Kpi label="Train 样本" value={String(run.report.dataset.train)}/><Kpi label="Val 样本" value={String(run.report.dataset.val)}/><Kpi label="Test 样本" value={String(run.report.dataset.test)}/><Kpi label="标签数" value={String(run.report.metrics.length)}/></div>
+       <div className="mini-heading top-space"><h3>五类风险 Y 标评估</h3><span>Test · synthetic scorer · AUC 不代表真实模型</span></div>
+       <TableWrap><thead><tr><th>Y 标</th><th>正样本数</th><th>正样本率</th><th>模拟评分 AUC</th></tr></thead><tbody>{run.report.metrics.map(m=><tr key={m.label}><td><strong className="metric-name">{m.label}</strong></td><td>{m.positives}</td><td>{fmt(m.positive_rate*100,2)}%</td><td>{m.auc===null?'无正负样本':fmt(m.auc,4)}</td></tr>)}</tbody></TableWrap>
+       <div className="mini-heading top-space"><h3>质量检查</h3></div>
+       <div className="checks">{run.report.checks.map(c=><div key={c.name}><Status done={c.passed} text={c.passed?'通过':'未完成'}/><span>{c.name}</span>{c.reason&&<small>{c.reason}</small>}</div>)}</div>
+       <div className="mini-heading top-space"><h3>模拟 Badcase</h3><span>仅展示匿名合成样本</span></div>
+       {run.report.badcases.length?<TableWrap><thead><tr><th>样本 ID</th><th>分类</th><th>标签</th><th>模拟风险评分</th></tr></thead><tbody>{run.report.badcases.map(b=><tr key={b.sample_id}><td className="mono">{b.sample_id}</td><td>{b.issue}</td><td>{b.label} = {b.actual}</td><td>{fmt(b.risk_score,4)}</td></tr>)}</tbody></TableWrap>:<div className="empty-small">本轮模拟未命中预设 Badcase 阈值</div>}
+       <div className="notice"><ShieldCheck size={16}/> {run.report.summary}</div>
+       <div className="action-row"><button className="ghost" onClick={newRun}><RefreshCw size={16}/> 新建下一轮实验</button><button className="primary" onClick={downloadReport}><Download size={16}/> 下载 JSON 测试报告</button></div></>
+       :<><div className="report-pending"><IconBox tone="green"><ClipboardList size={24}/></IconBox><h3>训练配置已完成，准备运行 Test 评估</h3><p>将对 {run.split.test} 条锁定测试样本计算 fpd7、fpd30、tpd30、c_m1、c_d30 的样本统计和模拟评分 AUC，并生成可下载报告。</p><div className="report-guard"><ShieldCheck size={17}/> 模拟评分不是实际训练模型预测；报告不会给出真实业务准出结论。</div></div>
+       <div className="action-row"><span className="action-hint">产物：完整测试报告 + Badcase 记录</span><button disabled={busy} className="primary" onClick={()=>postStage('/report',5)}>{busy?'计算中…':'生成测试报告'} <FileText size={16}/></button></div></>}
+      </section>}
+      <div className="bottom-nav"><button disabled={step===0} onClick={()=>setStep(Math.max(0,step-1))}><ArrowLeft size={16}/> 上一步</button><span>{step+1} / 6</span>{step<maxStep&&<button onClick={()=>setStep(step+1)}>下一阶段 <ArrowRight size={16}/></button>}</div>
      </div>
-   </main>
-   {modal&&<div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)setModal(false)}}><form className="modal" onSubmit={e=>void submit(e)}><div className="modal-heading"><div><span className="eyebrow">NEW EXPERIMENT</span><h2>创建实验</h2><p>配置一个可追溯的模拟 RL 训练实验。</p></div><button type="button" onClick={()=>setModal(false)} className="icon-button"><X size={20}/></button></div><label>实验名称<input required minLength={3} value={form.name} onChange={e=>setForm({...form,name:e.target.value})}/></label><div className="form-row"><label>Reward 版本<input required value={form.reward} onChange={e=>setForm({...form,reward:e.target.value})}/></label><label>Learning Rate<input required type="number" min="0.00000001" max="0.1" step="any" value={form.lr} onChange={e=>setForm({...form,lr:e.target.value})}/></label></div><label>Dataset 版本<select value={form.dataset} onChange={e=>setForm({...form,dataset:e.target.value})}><option value="credit-v12">credit-v12</option><option value="credit-v13">credit-v13</option></select></label><label>实验假设<textarea rows={3} value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})}/></label><div className="modal-footer"><button type="button" className="secondary-button" onClick={()=>setModal(false)}>取消</button><button type="submit" disabled={busy} className="primary-button"><Plus size={16}/>{busy?'创建中…':'创建实验'}</button></div></form></div>}
+     <aside className="inspector">
+      <div className="card insight-card"><div className="insight-header"><span><BookOpen size={16}/> 本阶段说明</span><Tag>STEP {String(step+1).padStart(2,'0')}</Tag></div><h3>{STAGES[step].title}</h3><p>{[
+        '沉淀数据表、分区、SQL 文本、采样参数与原始快照。真正接入时需绑定 ODPS 权限与执行接口。',
+        '从原始特征侧按样本 ID 关联 fpd7、fpd30、tpd30、c_m1、c_d30 的 Y 标；不要混入 Prompt。',
+        '以统一模板构造 user/query 数据；训练答案和标签不在 messages 中，适合作为 RL rollout 提示词。',
+        'Train/Val/Test 样本互斥；Val 用于选配置，Test 一旦冻结就不能用于反复调参。',
+        '配置 Reward 和学习率；当前仅输出模拟训练轨迹，真实版需要训练平台执行。',
+        '用锁定测试集形成指标、Badcase、数据血缘与报告；Demo 不满足真实模型准出条件。'
+      ][step]}</p><div className="insight-divider"/><strong className="insight-label">本步骤要沉淀的资产</strong><div className="asset-tags">{[
+        ['SQL Spec','Dataset Snapshot','Lineage'],
+        ['Feature Schema','Label Contract','Joined Dataset'],
+        ['Prompt Template','Query JSONL','Label Sidecar'],
+        ['Split Manifest','Random Seed','Isolation Check'],
+        ['Training Recipe','Reward Spec','Checkpoint Ref'],
+        ['Metric Results','Badcase Set','Test Report']
+      ][step].map(t=><span key={t}>{t}</span>)}</div></div>
+      <div className="card lineage-summary"><div className="insight-header"><span><Layers3 size={16}/> 当前实验概览</span></div><dl><div><dt>实验 ID</dt><dd>{run?.id||'待创建'}</dd></div><div><dt>ODPS 分区</dt><dd>{run?.source.partition||partition}</dd></div><div><dt>原始样本</dt><dd>{run?.row_count??'—'}</dd></div><div><dt>对话数据</dt><dd>{run?.query_count??0}</dd></div><div><dt>数据状态</dt><dd>{run?.stage||'not started'}</dd></div></dl></div>
+      <div className="small-note"><ShieldCheck size={17}/><p>演示环境只使用合成数据，所有真实 ODPS、Y 标服务、训练和推理接口均尚未连接。</p></div>
+     </aside>
+    </div>}
+   </div>
+  </main>
  </div>
 }
-export default App
