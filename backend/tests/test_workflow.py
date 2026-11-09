@@ -68,12 +68,22 @@ def test_end_to_end_workflow_and_no_label_leakage():
     assert trained.status_code == 200
     assert trained.json()["training"]["real_model_trained"] is False
     assert len(trained.json()["training"]["history"]) == 4
+    # Tune a second candidate on the same frozen data split, using Val only.
+    tuned = client.post(f"{BASE}/runs/{run_id}/train", json={
+        "epochs": 3, "learning_rate": .0000008,
+        "reward_weight": .25, "reward_version": "risk-aware-v3"
+    })
+    assert tuned.status_code == 200
+    assert len(tuned.json()["candidates"]) == 2
+    assert tuned.json()["training"]["candidate_id"] in ("C01", "C02")
 
     finished = client.post(f"{BASE}/runs/{run_id}/report")
     assert finished.status_code == 200
     report = finished.json()["report"]
     assert report["status"] == "DEMO_ONLY"
     assert report["model_trained"] is False
+    assert len(report["tuning_history"]) == 2
+    assert report["selected_candidate"] in ("C01", "C02")
     assert report["dataset"]["test_set_locked"] is True
     assert report["dataset"]["train"] + report["dataset"]["val"] + report["dataset"]["test"] == 100
     assert [row["label"] for row in report["metrics"]] == [
@@ -83,6 +93,7 @@ def test_end_to_end_workflow_and_no_label_leakage():
     assert all(c["passed"] for c in report["checks"][:4])
     assert report["checks"][-1]["passed"] is False
     assert client.post(f"{BASE}/runs/{run_id}/report").status_code == 409
+    assert client.post(f"{BASE}/runs/{run_id}/train", json={}).status_code == 409
     assert client.get(f"{BASE}/runs/{run_id}").json()["stage"] == "reported"
     assert any(row["id"] == run_id for row in client.get(BASE + "/runs").json())
 
