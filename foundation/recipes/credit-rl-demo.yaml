@@ -1,0 +1,15 @@
+id: credit-rl-demo
+version: v1
+mode: synthetic
+stages:
+  - requirements
+  - acquire_data
+  - build_dataset
+  - transform
+  - train
+  - validate
+  - holdout_test
+  - gate
+  - knowledge
+contracts: [credit-policy/v3, release-gate/v1]
+skills: [evaluate-credit]

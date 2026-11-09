@@ -1,0 +1,19 @@
+registry_version: v1
+metrics:
+  - id: test_risk
+    display_name: Simulated 3m30d amount-weighted risk
+    unit: percent
+    dataset: frozen_holdout
+    status: demo_formula_only
+  - id: avg_credit
+    display_name: Average strategy credit
+    unit: ten_thousand_cny
+    status: demo_formula_only
+  - id: coverage
+    display_name: Valid output coverage
+    unit: percent
+    status: demo_formula_only
+  - id: violations
+    display_name: Constraint violation rate
+    unit: percent
+    status: demo_formula_only

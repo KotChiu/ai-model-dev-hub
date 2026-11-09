@@ -1,0 +1,8 @@
+id: release-gate
+version: v1
+status: demo-only
+thresholds:
+  max_test_risk_percent: 3.5
+  min_coverage_percent: 95.0
+  max_constraint_violations_percent: 1.0
+note: These are illustrative thresholds, not production credit policies.

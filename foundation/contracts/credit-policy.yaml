@@ -1,0 +1,10 @@
+id: credit-policy
+version: v3
+status: frozen
+owner: credit-risk
+baseline_credit_field: total_credit_amt
+forbidden_substitutes: [gold, future_outcome]
+requirements:
+  - never use future outcomes as input features
+  - evaluate risk under the documented amount weighting
+  - keep validation and frozen holdout test sets separate
